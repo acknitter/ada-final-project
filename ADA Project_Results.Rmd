@@ -1,0 +1,565 @@
+---
+title: "ADA Project"
+author: "Alex Knitter"
+date: '2022-09-28'
+output: html_document
+---
+
+# Project plan
+
+#### 1. Research question
+
+Among non-elderly adults with asthma in 2021, how did daily fruit and vegetable intake affect their reported number of days of poor physical and mental health?
+
+#### 2. Identify each PICOT item in your research question
+
+*Population*: individuals 18-64 years of age with asthma
+
+*Intervention*: daily a) fruit and b) vegetable intake
+
+*Comparison group*: those with a) fruit and b) vegetable intake less than once per day
+
+*Outcome*: Self-reported number of days when poor physical or mental health limited usual activities (in the past 30 days)
+
+*Time frame*: 2021
+
+#### 3. Data source
+
+CDC, BRFSS 2021 (<https://www.cdc.gov/brfss/annual_data/annual_2021.html>)
+
+#### 4. Variables
+
+-   Age
+-   Sex
+-   Race/ethnicity
+-   Income
+-   Residence in urban/rural area
+-   Daily fruit intake (yes/no)
+-   Daily vegetable intake (yes/no)
+-   Days in past month when poor physical or mental health limited usual activities
+
+
+
+### Importing the Data
+
+Dataset loaded directly from CDC website: <https://www.cdc.gov/brfss/annual_data/2021/files/LLCP2021XPT.zip>
+
+```{r load-packages}
+pacman::p_load(haven, tidyverse, table1, labelled, magrittr, DiagrammeR, lmtest, MASS)
+```
+
+```{r import-data}
+temp <- tempfile(fileext = ".zip")
+download.file(url = "https://www.cdc.gov/brfss/annual_data/2021/files/LLCP2021XPT.zip", destfile = temp)
+brfss2021 <- read_xpt(file = temp)
+
+# if importing data from web link is giving difficulty, run the below to import from files
+# brfss2021 <- read_xpt("LLCP2021.XPT ")
+```
+
+
+### Preparing the Data
+
+```{r clean-data}
+brfss2021Clean <- brfss2021 %>%
+  # select variables of interest
+  dplyr::select(ASTHNOW, POORHLTH, `_FRTLT1A`, `_VEGLT1A`, `_INCOMG1`, `_URBSTAT`, `_RACE`, `_SEX`, `_AGEG5YR`, PHYSHLTH, MENTHLTH, `_FRT16A`, `_VEG23A`) %>%
+  # rename variables for ease of use
+  rename(has_asthma = ASTHNOW) %>%
+  rename(days_poor_health = POORHLTH) %>%
+  rename(fruit_daily = `_FRTLT1A`) %>%
+  rename(veg_daily = `_VEGLT1A`) %>%
+  rename(income = `_INCOMG1`) %>%
+  rename(urban_rural = `_URBSTAT`) %>%
+  rename(race_eth = `_RACE`) %>%
+  rename(sex = `_SEX`) %>%
+  rename(age_cat = `_AGEG5YR`) %>%
+  rename(days_physical_bad = PHYSHLTH) %>%
+  rename(days_mental_bad = MENTHLTH) %>%
+  rename(fruit_high = `_FRT16A`) %>%
+  rename(veg_high = `_VEG23A`) %>%
+  # recode numeric variable values
+  mutate(days_poor_health = as.numeric(recode(as.character(days_poor_health), 
+                                        '88' = '0', # none, 0 days poor health
+                                        '77' = NA_character_, # don't know
+                                        '99' = NA_character_))) %>% # refused
+  mutate(days_physical_bad = as.numeric(recode(as.character(days_physical_bad), 
+                                        '88' = '0', # none, 0 days poor health
+                                        '77' = NA_character_, # don't know
+                                        '99' = NA_character_))) %>% # refused
+  mutate(days_mental_bad = as.numeric(recode(as.character(days_mental_bad), 
+                                        '88' = '0', # none, 0 days poor health
+                                        '77' = NA_character_, # don't know
+                                        '99' = NA_character_))) %>% # refused
+  # recode factor variable levels
+  # for most variables, 9 = don't know, refused, missing
+  ## for has_asthma, 7 = don't know, 9 = refused
+  ## for age_cat, 14 = don't know, refused, missing
+  mutate(has_asthma = recode_factor(has_asthma,
+                                    '1' = "Has asthma",
+                                    '2' = "No current asthma",
+                                    '7' = NA_character_,
+                                    '9' = NA_character_)) %>%
+  mutate(fruit_daily = recode_factor(fruit_daily,
+                                     '1' = "Consumed fruit at least once daily",
+                                     '2' = "Consumed fruit < once daily",
+                                     '9' = NA_character_)) %>%
+  mutate(veg_daily = recode_factor(veg_daily,
+                                     '1' = "Consumed vegetables at least once daily",
+                                     '2' = "Consumed vegetables < once daily",
+                                     '9' = NA_character_)) %>%
+  mutate(income = recode_factor(income,
+                                '1' = "Less than $15,000",
+                                '2' = "$15,000 to < $25,000",
+                                '3' = "$25,000 to < $35,000",
+                                '4' = "$35,000 to < $50,000",
+                                '5' = "$50,000 to < $100,000",
+                                '6' = "$100,000 to < $200,000",
+                                '7' = "$200,000 or more",
+                                '9' = NA_character_)) %>%
+  mutate(urban_rural = recode_factor(urban_rural,
+                                     '1' = "Urban",
+                                     '2' = "Rural")) %>%
+  mutate(race_eth = recode_factor(race_eth,
+                                '1' = "White non-Hispanic",
+                                '2' = "Black non-Hispanic",
+                                '3' = "American Indian / Alaskan Native non-Hispanic",
+                                '4' = "Asian non-Hispanic",
+                                '5' = "Native Hawaiian / Pacific Islander non-Hispanic",
+                                '6' = "Other race non-Hispanic",
+                                '7' = "Multiracial non-Hispanic",
+                                '8' = "Hispanic",
+                                '9' = NA_character_)) %>%
+  mutate(age_cat = recode_factor(age_cat,
+                                '1' = "18-24 years",
+                                '2' = "25-29 years",
+                                '3' = "30-34 years",
+                                '4' = "35-39 years",
+                                '5' = "40-44 years",
+                                '6' = "45-49 years",
+                                '7' = "50-54 years",
+                                '8' = "55-59 years",
+                                '9' = "60-64 years",
+                                '10' = "65+ years",
+                                '11' = "65+ years",
+                                '12' = "65+ years",
+                                '13' = "65+ years",
+                                '14' = NA_character_)) %>%
+  mutate(sex = recode_factor(sex,
+                                     '1' = "Male",
+                                     '2' = "Female"))
+
+summary(brfss2021Clean)
+# frequencies are consistent with BRFSS codebook
+```
+
+
+```{r data-trim}
+
+# include only participants meeting inclusion criteria
+# count the number of participants lost with each criteria applied
+# assign() stores the dataset after each filter step
+
+brfssCleanFull <- brfss2021Clean %>%
+  # include only those with current asthma
+  filter(has_asthma == "Has asthma") %>%
+  # n = 42660 in temp dataframe after filtering by asthma
+  assign("sub_asthma", ., envir = .GlobalEnv) %>%
+  # exclude elderly adults, over 65 years of age
+  filter(age_cat != "65+ years") %>%
+  # n = 28912 after filtering by asthma and age
+  assign("sub_asthma_age", ., envir = .GlobalEnv) %>%
+  # include only those with valid daily fruit and veg intake
+  #   defined by CDC, Fruit >16 per day or Vegetables >23 per day
+  filter(fruit_high==1, veg_high==1) %>%
+  # n = 28618 after filtering by asthma age and daily f/v intake
+  assign("sub_asthma_age_fv", ., envir = .GlobalEnv) %>%
+  # drop these filtering variables from dataset
+  #   not needed further for analyses
+  dplyr::select(-has_asthma, -fruit_high, -veg_high, -days_physical_bad, -days_mental_bad) %>%
+  droplevels()
+
+nrow(brfss2021Clean)-nrow(sub_asthma)
+nrow(sub_asthma)-nrow(sub_asthma_age)
+nrow(sub_asthma_age)-nrow(sub_asthma_age_fv)
+nrow(sub_asthma_age_fv)-nrow(brfssCleanFull)
+
+# take a look!
+summary(brfssCleanFull)
+```
+
+
+### Explore the dataset
+
+```{r check-missing}
+# check if NAs are highly missing for certain patterns/pairs
+mice::md.pattern(brfssCleanFull, rotate.names=TRUE)
+
+mice::md.pairs(brfssCleanFull)
+
+# some variables with high Ns missing
+# but no clear patterns, seem proportional
+
+# To note: participants were not asked about poor health days if they reported no poor a) physical or b) mental health days in prior questions
+## if daily fruit/veg were protective, excluding these participants would bias findings towards the null
+```
+
+
+
+```{r final-data}
+# handling missingness by performing complete case analysis
+# therefore, exclude observations with missing values
+# count the number of participants lost with each criteria applied
+# assign() stores the dataset after each filter step
+brfss <- brfssCleanFull %>%
+  drop_na(days_poor_health) %>%
+  assign("sub_na1_healthdays", ., envir = .GlobalEnv) %>%
+  drop_na(fruit_daily) %>%
+  assign("sub_na2_fruit", ., envir = .GlobalEnv) %>%
+  drop_na(veg_daily) %>%
+  assign("sub_na3_veg", ., envir = .GlobalEnv) %>%
+  drop_na(income) %>%
+  assign("sub_na4_income", ., envir = .GlobalEnv) %>%
+  drop_na(urban_rural) %>%
+  assign("sub_na5_rural", ., envir = .GlobalEnv) %>%
+  drop_na(race_eth) %>%
+  assign("sub_na6_race", ., envir = .GlobalEnv) %>%
+  drop_na(sex) %>%
+  assign("sub_na7_sex", ., envir = .GlobalEnv) %>%
+  drop_na(age_cat) %>%
+  assign("sub_na8_age", ., envir = .GlobalEnv)
+
+# Note: this should not be used in place of missing n for each variable, exclusion steps are cumulative
+## ie, individuals with missing race may have been excluded in an earlier step
+```
+
+
+
+
+```{r label-variables}
+# add labels to all variables
+
+label(brfss$days_poor_health) <- "Days of Poor Health in the Past 30 Days"
+label(brfss$fruit_daily) <- "Daily Fruit Consumption in the Past 30 Days"
+label(brfss$veg_daily) <- "Daily Vegetable Consumption in the Past 30 Days"
+label(brfss$age_cat) <- "Age"
+label(brfss$sex) <- "Sex"
+label(brfss$race_eth) <- "Race/Ethnicity"
+label(brfss$urban_rural) <- "Urban/Rural Status"
+label(brfss$income) <- "Income Category"
+```
+
+
+### Flow diagram
+
+```{r figure1}
+#Figure 1
+grViz("digraph flowchart {
+
+      # node definitions with substituted label text
+      node [fontname = Helvetica, shape = rectangle, fontsize=15] 
+      #notes indicate how many boxes you will have in your diagram. Since I have two sets of exclusions, I will have three nodes.
+      tab1 [label = '@@1']
+      tab2 [label = '@@2']
+      tab3 [label = '@@3']
+      tab4 [label = '@@4']
+      tab5 [label = '@@5']
+      tab6 [label = '@@6']
+      tab7 [label = '@@7']
+      tab8 [label = <
+      <b>@@8</b>
+      >]
+      
+      # edge definitions with the node IDs are used to indicate how the rectangle boxes flow from each other. This is a simple flow chart but I could create branching instead as below
+      tab1 -> tab2 
+      tab1 -> tab3
+      tab3 -> tab4
+      tab3 -> tab5
+      tab5 -> tab6
+      tab5 -> tab7
+      tab5 -> tab8
+}
+      #This set of code provides the text in each rectangle box.
+      [1]: 'BRFSS 2021 survey participants N= 438,693'
+      [2]: 'Excluding 396,033 individuals \\n without current asthma'
+      [3]: 'Individuals with current asthma n= 42,660'
+      [4]: 'Excluding 13,748 individuals over age 65'
+      [5]: 'Non-elderly (<65 years) adults with asthma n= 28,912'
+      [6]: 'Excluding 294 individuals with invalid \\n daily fruit or vegetable intake'
+      [6]: 'Excluding 13,373 individuals with missing data \\n on variables used in the analysis'
+      [8]: 'Final analytic sample \\n n= 15,245'
+      ")
+```
+
+
+
+
+
+### Descriptive Statistics
+
+
+#### Figure A. Histogram of Days of Poor Health among Non-elderly Adults with Asthma (BRFSS 2021)
+```{r hist-poorHlth, warning=FALSE, message=FALSE}
+brfss %>%
+  ggplot(aes(x = days_poor_health)) +
+  geom_histogram()
+```
+
+
+#### Figure B. Histogram of Days of Poor Health by Fruit Intake among Non-elderly Adults with Asthma (BRFSS 2021)
+```{r hist-byFruit, warning=FALSE, message=FALSE}
+brfss %>% 
+  ggplot(aes(x = days_poor_health)) +
+  geom_histogram() +
+  facet_wrap(facets = vars(fruit_daily)) +
+  labs(x = "Days of Poor Health", y = "Number of Participants") +
+  theme_bw()
+
+brfss %>% 
+  ggplot(aes(x = days_poor_health)) +
+  geom_histogram() +
+  facet_wrap(facets = vars(veg_daily)) +
+  labs(x = "Days of Poor Health", y = "Number of Participants") +
+  theme_bw()
+```
+
+
+#### Figure C. Histogram of Days of Poor Health by Vegetable Intake among Non-elderly Adults with Asthma (BRFSS 2021)
+```{r hist-byVeg, warning=FALSE, message=FALSE}
+brfss %>% 
+  ggplot(aes(x = days_poor_health)) +
+  geom_histogram() +
+  facet_wrap(facets = vars(veg_daily)) +
+  labs(x = "Days of Poor Health", y = "Number of Participants") +
+  theme_bw()
+```
+
+
+#### Table 1: Sample characteristics
+
+```{r table1}
+brfss %$%
+  table1(~ age_cat + sex + race_eth + urban_rural + income + days_poor_health | fruit_daily, data=.)
+
+brfss %$%
+  table1(~ age_cat + sex + race_eth + urban_rural + income + days_poor_health | veg_daily, data=.)
+
+brfss %$%
+  table1(~ age_cat + sex + race_eth + urban_rural + income + fruit_daily + veg_daily + days_poor_health, data=.)
+```
+
+
+### Regression Models
+
+#### Days of poor health by daily fruit
+
+```{r uni-fruit}
+# univariate poisson regression by daily fruit intake
+mp_fruitOnly <- glm(days_poor_health ~ fruit_daily, family = poisson(), data = brfss)
+summary(mp_fruitOnly)
+#broom::tidy(mp_fruitOnly, exponentiate = TRUE, conf.int = TRUE)
+
+# univariate negative binomial regression
+mnb_fruitOnly <- glm.nb(days_poor_health ~ fruit_daily, data = brfss)
+summary(mnb_fruitOnly)
+broom::tidy(mnb_fruitOnly, exponentiate = TRUE, conf.int = TRUE)
+
+lrtest(mp_fruitOnly, mnb_fruitOnly) # p-value is <0.05 so use negative binomial
+```
+
+
+```{r multi-fruit}
+# multivariate poisson regression
+mp_fruitFull <- glm(days_poor_health ~ fruit_daily + age_cat + sex + race_eth + urban_rural + income, family = "poisson", data = brfss)
+summary(mp_fruitFull)
+broom::tidy(mp_fruitFull, exponentiate = TRUE, conf.int = TRUE)
+
+# multivariate negative binomial regression
+mnb_fruitFull <- glm.nb(days_poor_health ~ fruit_daily + age_cat + sex + race_eth + urban_rural + income, data = brfss)
+summary(mnb_fruitFull)
+broom::tidy(mnb_fruitFull, exponentiate = TRUE, conf.int = TRUE)
+
+lrtest(mp_fruitFull, mnb_fruitFull) # p-value is <0.05 so use negative binomial
+
+car::vif(mnb_fruitFull)
+```
+
+
+```{r modelComp-fruit}
+stargazer::stargazer(mp_fruitFull, mnb_fruitFull, title="Model Comparison", type="text",align=TRUE,single.row=TRUE, digits=6)
+```
+
+
+#### Fruit Interpretation
+
+Adults with asthma who consumed fruit less than once per day had 1.02 (95% CI 0.97-1.08) times higher incidence of excess poor health days compared to adults with asthma who consumed fruit at least once daily, not a significant difference (adjusted for age, sex, race, urban/rural status and income).
+
+
+
+#### Days of poor health by daily veg
+
+
+```{r uni-veg}
+# univariate poisson regression by daily veg intake
+mp_vegOnly <- glm(days_poor_health ~ veg_daily, family = poisson(), data = brfss)
+summary(mp_vegOnly)
+#broom::tidy(mp_fruitOnly, exponentiate = TRUE, conf.int = TRUE)
+
+# univariate negative binomial regression
+mnb_vegOnly <- glm.nb(days_poor_health ~ veg_daily, data = brfss)
+summary(mnb_vegOnly)
+broom::tidy(mnb_vegOnly, exponentiate = TRUE, conf.int = TRUE)
+
+lrtest(mp_vegOnly, mnb_vegOnly) # p-value is <0.05 so use negative binomial
+```
+
+
+```{r multi-veg}
+# multivariate poisson regression
+mp_vegFull <- glm(days_poor_health ~ veg_daily + age_cat + sex + race_eth + urban_rural + income, family = "poisson", data = brfss)
+summary(mp_vegFull)
+#broom::tidy(mp_vegFull, exponentiate = TRUE, conf.int = TRUE)
+
+# multivariate negative binomial regression
+mnb_vegFull <- glm.nb(days_poor_health ~ veg_daily + age_cat + sex + race_eth + urban_rural + income, data = brfss)
+summary(mnb_vegFull)
+broom::tidy(mnb_vegFull, exponentiate = TRUE, conf.int = TRUE)
+
+
+lrtest(mp_vegFull, mnb_vegFull) # p-value is <0.05 so use negative binomial
+
+car::vif(mnb_vegFull)
+```
+
+
+#### Veg Interpretation
+
+Adults with asthma who consumed vegetables less than once per day had 1.08 (95% CI 1.003-1.16) times higher incidence of excess poor health days compared to adults with asthma who consumed vegetables at least once daily (adjusted for age, sex, race, urban/rural status and income).
+
+
+
+## Sensitivity analysis (for personal reference, not included in proposal or abstract)
+
+#### Check if poor health days coding issue (noted in line 201) affects results
+
+```{r ALT-healthdays-recode}
+brfss2021Clean_CHECK <- brfss2021 %>%
+  # select variables of interest
+  dplyr::select(ASTHNOW, POORHLTH, `_FRTLT1A`, `_VEGLT1A`, `_INCOMG1`, `_URBSTAT`, `_RACE`, `_SEX`, `_AGEG5YR`, PHYSHLTH, MENTHLTH, `_FRT16A`, `_VEG23A`) %>%
+  # rename variables for ease of use
+  rename(has_asthma = ASTHNOW) %>%
+  rename(days_poor_health = POORHLTH) %>%
+  rename(fruit_daily = `_FRTLT1A`) %>%
+  rename(veg_daily = `_VEGLT1A`) %>%
+  rename(income = `_INCOMG1`) %>%
+  rename(urban_rural = `_URBSTAT`) %>%
+  rename(race_eth = `_RACE`) %>%
+  rename(sex = `_SEX`) %>%
+  rename(age_cat = `_AGEG5YR`) %>%
+  rename(days_physical_bad = PHYSHLTH) %>%
+  rename(days_mental_bad = MENTHLTH) %>%
+  rename(fruit_high = `_FRT16A`) %>%
+  rename(veg_high = `_VEG23A`) %>%
+  # recode numeric variable values
+  mutate(days_poor_health = replace_na(days_poor_health, 0)) %>%
+  mutate(days_poor_health = as.numeric(recode(as.character(days_poor_health), 
+                                        '88' = '0', # none, 0 days poor health
+                                        '77' = NA_character_, # don't know
+                                        '99' = NA_character_))) %>% # refused
+  mutate(days_physical_bad = as.numeric(recode(as.character(days_physical_bad), 
+                                        '88' = '0', # none, 0 days poor health
+                                        '77' = NA_character_, # don't know
+                                        '99' = NA_character_))) %>% # refused
+  mutate(days_mental_bad = as.numeric(recode(as.character(days_mental_bad), 
+                                        '88' = '0', # none, 0 days poor health
+                                        '77' = NA_character_, # don't know
+                                        '99' = NA_character_))) %>% # refused
+  # recode factor variable levels
+  # for most variables, 9 = don't know, refused, missing
+  ## for has_asthma, 7 = don't know, 9 = refused
+  ## for age_cat, 14 = don't know, refused, missing
+  mutate(has_asthma = recode_factor(has_asthma,
+                                    '1' = "Has asthma",
+                                    '2' = "No current asthma",
+                                    '7' = NA_character_,
+                                    '9' = NA_character_)) %>%
+  mutate(fruit_daily = recode_factor(fruit_daily,
+                                     '1' = "Consumed fruit at least once daily",
+                                     '2' = "Consumed fruit < once daily",
+                                     '9' = NA_character_)) %>%
+  mutate(veg_daily = recode_factor(veg_daily,
+                                     '1' = "Consumed vegetables at least once daily",
+                                     '2' = "Consumed vegetables < once daily",
+                                     '9' = NA_character_)) %>%
+  mutate(income = recode_factor(income,
+                                '1' = "Less than $15,000",
+                                '2' = "$15,000 to < $25,000",
+                                '3' = "$25,000 to < $35,000",
+                                '4' = "$35,000 to < $50,000",
+                                '5' = "$50,000 to < $100,000",
+                                '6' = "$100,000 to < $200,000",
+                                '7' = "$200,000 or more",
+                                '9' = NA_character_)) %>%
+  mutate(urban_rural = recode_factor(urban_rural,
+                                     '1' = "Urban",
+                                     '2' = "Rural")) %>%
+  mutate(race_eth = recode_factor(race_eth,
+                                '1' = "White non-Hispanic",
+                                '2' = "Black non-Hispanic",
+                                '3' = "American Indian / Alaskan Native non-Hispanic",
+                                '4' = "Asian non-Hispanic",
+                                '5' = "Native Hawaiian / Pacific Islander non-Hispanic",
+                                '6' = "Other race non-Hispanic",
+                                '7' = "Multiracial non-Hispanic",
+                                '8' = "Hispanic",
+                                '9' = NA_character_)) %>%
+  mutate(age_cat = recode_factor(age_cat,
+                                '1' = "18-24 years",
+                                '2' = "25-29 years",
+                                '3' = "30-34 years",
+                                '4' = "35-39 years",
+                                '5' = "40-44 years",
+                                '6' = "45-49 years",
+                                '7' = "50-54 years",
+                                '8' = "55-59 years",
+                                '9' = "60-64 years",
+                                '10' = "65+ years",
+                                '11' = "65+ years",
+                                '12' = "65+ years",
+                                '13' = "65+ years",
+                                '14' = NA_character_)) %>%
+  mutate(sex = recode_factor(sex,
+                                     '1' = "Male",
+                                     '2' = "Female"))
+
+summary(brfss2021Clean_CHECK$days_poor_health)
+
+brfssCleanFull_CHECK <- brfss2021Clean_CHECK %>%
+  # include only those with current asthma
+  filter(has_asthma == "Has asthma") %>%
+
+  filter(age_cat != "65+ years") %>%
+
+  filter(fruit_high==1, veg_high==1) %>%
+
+  dplyr::select(-has_asthma, -fruit_high, -veg_high, -days_physical_bad, -days_mental_bad) %>%
+  droplevels() %>%
+  drop_na()
+```
+
+
+```{r ALT-healthdays-multiFruit}
+mnb_fruitFull_CHECK <- glm.nb(days_poor_health ~ fruit_daily + age_cat + sex + race_eth + urban_rural + income, data = brfssCleanFull_CHECK)
+summary(mnb_fruitFull_CHECK)
+broom::tidy(mnb_fruitFull_CHECK, exponentiate = TRUE, conf.int = TRUE)
+```
+
+
+```{r ALT-healthdays-multiVeg}
+# multivariate negative binomial regression
+mnb_vegFull_CHECK <- glm.nb(days_poor_health ~ veg_daily + age_cat + sex + race_eth + urban_rural + income, data = brfssCleanFull_CHECK)
+summary(mnb_vegFull_CHECK)
+broom::tidy(mnb_vegFull_CHECK, exponentiate = TRUE, conf.int = TRUE)
+```
+
+
